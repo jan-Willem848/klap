@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head><meta charset="utf-8"><title>Klap voor Claude</title></head>
+<body style="font-family:sans-serif;text-align:center;margin-top:60px">
+<h1>👏👏 Hey Claude, wake up</h1>
+<p id="status">Klik ergens of druk op een toets om te starten</p>
+<p id="teller" style="font-size:24px"></p>
+<p id="tekst" style="font-size:20px;color:gray"></p>
+
+<script>
+// Hoe hard moet een klap zijn? Getal tussen 0 en 1. Hoger = minder gevoelig.
+const GEVOELIGHEID = 0.6;
+
+let klappen = [];
+let vorigeKlap = 0;
+let stilteVoor = 0;
+let luistert = false;
+let wasStil = true;
+let praatModus = false;
+
+function reset() {
+  klappen = [];
+  document.getElementById("teller").textContent = "";
+}
+function zetStatus(t) { document.getElementById("status").textContent = t; }
+function openClaude() { window.open("https://claude.ai/new", "_blank"); }
+
+// Chrome verstaat "claude" soms als "cloud" of "clod"
+function klopt(tekst) {
+  const claudeAchtig = /(claude|claud|cloud|clod|klaud|clawed)/.test(tekst);
+  const wakeUp = /(wake up|wakeup|wake-up)/.test(tekst);
+  return claudeAchtig && wakeUp;
+}
+
+function luisterNaarWoorden() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { zetStatus("Spraakherkenning werkt hier niet"); return; }
+  praatModus = true;
+  zetStatus("Zeg nu: Hey Claude, wake up!");
+  document.getElementById("tekst").textContent = "";
+
+  const r = new SR();
+  r.lang = "en-US";
+  r.interimResults = true;
+  r.continuous = true;
+  let gevonden = false;
+
+  r.onresult = (e) => {
+    let tekst = "";
+    for (let i = 0; i < e.results.length; i++) tekst += e.results[i][0].transcript + " ";
+    tekst = tekst.toLowerCase();
+    document.getElementById("tekst").textContent = "Ik hoorde: " + tekst;
+    if (!gevonden && klopt(tekst)) {
+      gevonden = true;
+      try { r.stop(); } catch (err) {}
+      openClaude();
+    }
+  };
+  r.onerror = () => {};
+  r.onend = () => {
+    praatModus = false;
+    reset();
+    zetStatus("Ik luister... klap twee keer!");
+  };
+
+  try { r.start(); } catch (err) { praatModus = false; }
+  setTimeout(() => { try { r.stop(); } catch (err) {} }, 7000);
+}
+
+async function start() {
+  if (luistert) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const ctx = new AudioContext();
+    await ctx.resume();
+    const bron = ctx.createMediaStreamSource(stream);
+
+    const verwerker = ctx.createScriptProcessor(1024, 1, 1);
+    verwerker.onaudioprocess = (e) => {
+      if (praatModus) return;
+
+      const data = e.inputBuffer.getChannelData(0);
+      let piek = 0;
+      for (let i = 0; i < data.length; i++) piek = Math.max(piek, Math.abs(data[i]));
+      const nu = Date.now();
+
+      if (piek > GEVOELIGHEID && wasStil && nu - vorigeKlap > 150) {
+        wasStil = false;
+        if (klappen.length === 0) stilteVoor = nu - vorigeKlap;
+        klappen.push(nu);
+        vorigeKlap = nu;
+        document.getElementById("teller").textContent = "Klap " + klappen.length;
+        // Meer dan 2 klappen? Dan is het geen dubbele klap
+        if (klappen.length > 2) reset();
+      }
+      if (piek < 0.2) wasStil = true;
+
+      // 1 klap en daarna te lang niks? Opnieuw beginnen
+      if (klappen.length === 1 && nu - klappen[0] > 1000) reset();
+
+      // Twee klappen kort na elkaar en daarna 0,4 seconde stilte? Dan luisteren we naar je stem
+      if (klappen.length === 2 && nu - klappen[1] > 400) {
+        const g = klappen[1] - klappen[0];
+        if (g > 150 && g < 800 && stilteVoor > 1000) luisterNaarWoorden();
+        reset();
+      }
+    };
+    bron.connect(verwerker);
+    verwerker.connect(ctx.destination);
+
+    luistert = true;
+    zetStatus("Ik luister... klap twee keer!");
+  } catch (e) {
+    zetStatus("Klik ergens of druk op een toets om te starten");
+  }
+}
+
+document.addEventListener("click", start);
+document.addEventListener("keydown", start);
+start();
+</script>
+</body>
+</html>
